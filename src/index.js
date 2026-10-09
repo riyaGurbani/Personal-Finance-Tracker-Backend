@@ -1,6 +1,10 @@
 import express from 'express'
 import cors from 'cors'
+import dotenv from 'dotenv'
+import { connectDB } from './config/db.js'
 import dashboardRoutes from './routes/dashboardRoutes.js'
+
+dotenv.config()
 
 // Create Express app
 const app = express()
@@ -24,7 +28,11 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3001
 
-app.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`)
+// Start server after connecting to DB
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Backend running on http://localhost:${PORT}`)
+  })
 })
+
 
