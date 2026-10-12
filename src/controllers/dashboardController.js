@@ -1,6 +1,13 @@
 import { Expense } from '../models/Expense.js'
+import dashboardData from '../data/dashboard.json' with { type: 'json' }
 
 export async function getDashboard(req, res) {
+  const useMockData = process.env.USE_MOCK_DATA === 'true'
+
+  // if (useMockData) {
+  //   return res.json(dashboardData)
+  // }
+
   try {
     // Fetch expenses (for now, all expenses; later we can limit by date/user)
     const expenses = await Expense.find({}).sort({ date: -1 })

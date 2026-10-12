@@ -8,7 +8,18 @@ const expenseSchema = new mongoose.Schema(
     currency: { type: String, default: 'INR' },
     date: { type: Date, required: true },
     paymentMethod: { type: String },
+    notes: { type: String, default: '' },
     userId: { type: String },
+    source: {
+      type: String,
+      enum: ['manual', 'ai', 'import'],
+      default: 'manual',
+    },
+    isRecurring: { type: Boolean, default: false },
+    isAiCategorized: { type: Boolean, default: false },
+    aiCategorySuggestion: { type: String, default: null },
+    aiCategoryConfidence: { type: Number, default: null },
+    aiCategoryReason: { type: String, default: null },
   },
   {
     timestamps: true,

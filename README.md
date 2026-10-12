@@ -41,9 +41,10 @@ Create a `.env` file in the project root with the necessary configuration, for e
 ```env
 PORT=3000
 NODE_ENV=development
-DB_URL=your_database_connection_string
-JWT_SECRET=your_secret_key
+MONGODB_URI=your_mongodb_connection_string
 ```
+
+You can copy `.env.example` to `.env` and replace the MongoDB URI with your actual connection string.
 
 ## Scripts
 
