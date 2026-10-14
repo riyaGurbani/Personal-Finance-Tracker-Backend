@@ -35,6 +35,18 @@ function buildExpenseFilters(query) {
     }
   }
 
+  if (query.minAmount || query.maxAmount) {
+    filters.amount = {}
+
+    if (query.minAmount) {
+      filters.amount.$gte = Number(query.minAmount)
+    }
+
+    if (query.maxAmount) {
+      filters.amount.$lte = Number(query.maxAmount)
+    }
+  }
+
   return filters
 }
 

@@ -31,10 +31,54 @@ function buildMockCategoryTrendInsight(context) {
   }
 }
 
+function buildMockAnomalyInsight(context) {
+  const { anomaly, averageAmount } = context.anomalyDetection
+
+  if (!anomaly) {
+    return {
+      title: 'No unusual spending detected',
+      summary: 'Recent transactions are within the expected spending range.',
+      severity: 'low',
+    }
+  }
+
+  return {
+    title: 'Unusual high-value expense detected',
+    summary: `A ₹${anomaly.amount.toFixed(2)} ${anomaly.category} transaction at ${anomaly.merchant} is significantly above your recent average transaction amount of ₹${averageAmount.toFixed(2)}.`,
+    severity: anomaly.deviationPercent > 150 ? 'high' : anomaly.deviationPercent > 75 ? 'medium' : 'low',
+  }
+}
+
+function buildMockSavingsOpportunityInsight(context) {
+  const { opportunity } = context.savingsOpportunity
+
+  if (!opportunity) {
+    return {
+      title: 'No savings opportunity identified',
+      summary: 'There is not enough spending data yet to identify a savings opportunity.',
+      severity: 'low',
+    }
+  }
+
+  return {
+    title: `Savings opportunity in ${opportunity.category}`,
+    summary: `You spent ₹${opportunity.totalSpend.toFixed(2)} at ${opportunity.merchant} this month across ${opportunity.transactionCount} transactions. Reducing this by 15% could save about ₹${opportunity.potentialSavings.toFixed(2)}.`,
+    severity: opportunity.potentialSavings > 500 ? 'high' : opportunity.potentialSavings > 200 ? 'medium' : 'low',
+  }
+}
+
 export async function generateJsonCompletion({ prompt, context }) {
   const provider = process.env.LLM_PROVIDER || 'mock'
 
   if (provider === 'mock') {
+    if (context.savingsOpportunity) {
+      return buildMockSavingsOpportunityInsight(context)
+    }
+
+    if (context.anomalyDetection) {
+      return buildMockAnomalyInsight(context)
+    }
+
     if (context.categoryTrend) {
       return buildMockCategoryTrendInsight(context)
     }

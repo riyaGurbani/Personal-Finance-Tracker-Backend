@@ -131,3 +131,85 @@ export async function getCategoryTrendMetrics(userId = 'riya-demo') {
     },
   }
 }
+
+export async function getAnomalyDetectionMetrics(userId = 'riya-demo') {
+  const recentExpenses = await Expense.find({ userId }).sort({ date: -1 }).limit(20).lean()
+
+  if (recentExpenses.length === 0) {
+    return {
+      anomaly: null,
+      averageAmount: 0,
+      thresholdMultiplier: 2,
+      sampleSize: 0,
+      currency: 'INR',
+    }
+  }
+
+  const averageAmount = recentExpenses.reduce((sum, expense) => sum + expense.amount, 0) / recentExpenses.length
+  const thresholdMultiplier = 2
+  const anomalyCandidate = recentExpenses.find((expense) => expense.amount >= averageAmount * thresholdMultiplier) || recentExpenses[0]
+  const deviationPercent =
+    averageAmount === 0 ? 0 : Number((((anomalyCandidate.amount - averageAmount) / averageAmount) * 100).toFixed(2))
+
+  return {
+    anomaly: {
+      merchant: anomalyCandidate.merchant,
+      category: anomalyCandidate.category,
+      amount: Number(anomalyCandidate.amount.toFixed(2)),
+      date: anomalyCandidate.date,
+      deviationPercent,
+    },
+    averageAmount: Number(averageAmount.toFixed(2)),
+    thresholdMultiplier,
+    sampleSize: recentExpenses.length,
+    currency: anomalyCandidate.currency || 'INR',
+  }
+}
+
+export async function getSavingsOpportunityMetrics(userId = 'riya-demo') {
+  const currentMonth = getMonthRange()
+  const currentMonthExpenses = await Expense.find({
+    userId,
+    date: { $gte: currentMonth.start, $lt: currentMonth.end },
+  }).lean()
+
+  if (currentMonthExpenses.length === 0) {
+    return {
+      opportunity: null,
+      currency: 'INR',
+      transactionCount: 0,
+    }
+  }
+
+  const merchantTotals = currentMonthExpenses.reduce((totals, expense) => {
+    const key = expense.merchant
+    if (!totals[key]) {
+      totals[key] = {
+        merchant: expense.merchant,
+        category: expense.category,
+        totalSpend: 0,
+        transactionCount: 0,
+      }
+    }
+
+    totals[key].totalSpend += expense.amount
+    totals[key].transactionCount += 1
+    return totals
+  }, {})
+
+  const rankedMerchants = Object.values(merchantTotals)
+    .map((merchant) => ({
+      ...merchant,
+      totalSpend: Number(merchant.totalSpend.toFixed(2)),
+      averageSpend: Number((merchant.totalSpend / merchant.transactionCount).toFixed(2)),
+      potentialSavings: Number((merchant.totalSpend * 0.15).toFixed(2)),
+    }))
+    .sort((a, b) => b.potentialSavings - a.potentialSavings)
+
+  return {
+    opportunity: rankedMerchants[0] || null,
+    merchants: rankedMerchants,
+    currency: currentMonthExpenses[0]?.currency || 'INR',
+    transactionCount: currentMonthExpenses.length,
+  }
+}
