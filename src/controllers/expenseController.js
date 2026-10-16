@@ -75,6 +75,7 @@ function formatExpense(expense) {
     aiCategorySuggestion: expense.aiCategorySuggestion,
     aiCategoryConfidence: expense.aiCategoryConfidence,
     aiCategoryReason: expense.aiCategoryReason,
+    aiCategoryMismatch: Boolean(expense.isAiCategorized && expense.aiCategorySuggestion && expense.category !== expense.aiCategorySuggestion),
     createdAt: expense.createdAt,
     updatedAt: expense.updatedAt,
   }
@@ -163,6 +164,14 @@ export async function createExpense(req, res) {
           : Number(aiCategoryConfidence),
       aiCategoryReason: aiCategoryReason || null,
     })
+
+    if (expense.isAiCategorized && expense.aiCategorySuggestion && expense.category !== expense.aiCategorySuggestion) {
+      console.warn('Expense saved with manual category different from AI suggestion.', {
+        merchant: expense.merchant,
+        category: expense.category,
+        aiCategorySuggestion: expense.aiCategorySuggestion,
+      })
+    }
 
     res.status(201).json({ item: formatExpense(expense) })
   } catch (error) {

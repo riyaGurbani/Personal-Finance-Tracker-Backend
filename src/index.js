@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
 import aiRoutes from './routes/aiRoutes.js'
+import { logLlmStartupStatus } from './services/ai/llmClient.js'
 import dashboardRoutes from './routes/dashboardRoutes.js'
 import aiAssistantRoutes from './routes/aiAssistantRoutes.js'
 import expenseRoutes from './routes/expenseRoutes.js'
@@ -38,6 +39,9 @@ const PORT = process.env.PORT || 3001
 
 async function startServer() {
   try {
+    console.log(`AI debug logs ${process.env.AI_DEBUG_LOGS === 'true' ? 'enabled' : 'disabled'}.`)
+    await logLlmStartupStatus()
+
     if (useMockData) {
       console.log('Using mock dashboard data. MongoDB connection skipped.')
     } else {

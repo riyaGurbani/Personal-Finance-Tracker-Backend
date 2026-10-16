@@ -6,8 +6,9 @@ import {
 } from '../analytics/dashboardAnalyticsService.js'
 import { Insight } from '../../models/Insight.js'
 import { buildSpendingSummaryContext } from './context/buildSpendingSummaryContext.js'
+import { categorizeExpense } from './expenseCategorizationService.js'
 import { formatSpendingSummaryInsight } from './formatters/spendingSummaryFormatter.js'
-import { generateJsonCompletion } from './llmClient.js'
+import { generateJsonCompletion, getLlmHealth, getLlmProviderSource } from './llmClient.js'
 import { buildSpendingSummaryPrompt } from './prompts/spendingSummaryPrompt.js'
 import {
   getFallbackSpendingSummaryInsight,
@@ -119,22 +120,66 @@ function formatSavingsOpportunityInsight(insight) {
   }
 }
 
+async function getCachedInsight(userId, cardType) {
+  const cachedInsight = await Insight.findOne({ userId, cardType }).lean()
+
+  if (!cachedInsight) {
+    return null
+  }
+
+  return {
+    cardType: cachedInsight.cardType,
+    title: cachedInsight.title,
+    summary: cachedInsight.summary,
+    severity: cachedInsight.severity,
+    source: cachedInsight.source,
+  }
+}
+
+async function generateInsightWithFallback({
+  userId,
+  cardType,
+  context,
+  prompt,
+  validate,
+  getFallback,
+  format,
+  errorLabel,
+}) {
+  try {
+    const insight = await generateJsonCompletion({ prompt, context })
+    const validatedInsight = validate(insight) ? insight : getFallback()
+    return format(validatedInsight)
+  } catch (error) {
+    console.error(`Failed to generate ${errorLabel}:`, error)
+
+    const cachedInsight = await getCachedInsight(userId, cardType)
+    if (cachedInsight) {
+      return cachedInsight
+    }
+
+    return {
+      ...format(getFallback()),
+      source: 'mock',
+    }
+  }
+}
+
 export async function getSpendingSummaryInsight(userId = 'riya-demo') {
   const metrics = await getSpendingSummaryMetrics(userId)
   const context = buildSpendingSummaryContext(metrics)
   const prompt = buildSpendingSummaryPrompt(context)
 
-  try {
-    const insight = await generateJsonCompletion({ prompt, context })
-    const validatedInsight = validateSpendingSummaryInsight(insight)
-      ? insight
-      : getFallbackSpendingSummaryInsight()
-
-    return formatSpendingSummaryInsight(validatedInsight)
-  } catch (error) {
-    console.error('Failed to generate spending summary insight:', error)
-    return formatSpendingSummaryInsight(getFallbackSpendingSummaryInsight())
-  }
+  return generateInsightWithFallback({
+    userId,
+    cardType: 'summary',
+    context,
+    prompt,
+    validate: validateSpendingSummaryInsight,
+    getFallback: getFallbackSpendingSummaryInsight,
+    format: formatSpendingSummaryInsight,
+    errorLabel: 'spending summary insight',
+  })
 }
 
 export async function getCategoryTrendInsight(userId = 'riya-demo') {
@@ -142,15 +187,16 @@ export async function getCategoryTrendInsight(userId = 'riya-demo') {
   const context = buildCategoryTrendContext(metrics)
   const prompt = buildCategoryTrendPrompt(context)
 
-  try {
-    const insight = await generateJsonCompletion({ prompt, context })
-    const validatedInsight = validateCategoryTrendInsight(insight) ? insight : getFallbackCategoryTrendInsight()
-
-    return formatCategoryTrendInsight(validatedInsight)
-  } catch (error) {
-    console.error('Failed to generate category trend insight:', error)
-    return formatCategoryTrendInsight(getFallbackCategoryTrendInsight())
-  }
+  return generateInsightWithFallback({
+    userId,
+    cardType: 'category-trend',
+    context,
+    prompt,
+    validate: validateCategoryTrendInsight,
+    getFallback: getFallbackCategoryTrendInsight,
+    format: formatCategoryTrendInsight,
+    errorLabel: 'category trend insight',
+  })
 }
 
 export async function getAnomalyDetectionInsight(userId = 'riya-demo') {
@@ -158,15 +204,16 @@ export async function getAnomalyDetectionInsight(userId = 'riya-demo') {
   const context = buildAnomalyDetectionContext(metrics)
   const prompt = buildAnomalyDetectionPrompt(context)
 
-  try {
-    const insight = await generateJsonCompletion({ prompt, context })
-    const validatedInsight = validateAnomalyDetectionInsight(insight) ? insight : getFallbackAnomalyDetectionInsight()
-
-    return formatAnomalyDetectionInsight(validatedInsight)
-  } catch (error) {
-    console.error('Failed to generate anomaly detection insight:', error)
-    return formatAnomalyDetectionInsight(getFallbackAnomalyDetectionInsight())
-  }
+  return generateInsightWithFallback({
+    userId,
+    cardType: 'anomaly-detection',
+    context,
+    prompt,
+    validate: validateAnomalyDetectionInsight,
+    getFallback: getFallbackAnomalyDetectionInsight,
+    format: formatAnomalyDetectionInsight,
+    errorLabel: 'anomaly detection insight',
+  })
 }
 
 export async function getSavingsOpportunityInsight(userId = 'riya-demo') {
@@ -174,15 +221,16 @@ export async function getSavingsOpportunityInsight(userId = 'riya-demo') {
   const context = buildSavingsOpportunityContext(metrics)
   const prompt = buildSavingsOpportunityPrompt(context)
 
-  try {
-    const insight = await generateJsonCompletion({ prompt, context })
-    const validatedInsight = validateSavingsOpportunityInsight(insight) ? insight : getFallbackSavingsOpportunityInsight()
-
-    return formatSavingsOpportunityInsight(validatedInsight)
-  } catch (error) {
-    console.error('Failed to generate savings opportunity insight:', error)
-    return formatSavingsOpportunityInsight(getFallbackSavingsOpportunityInsight())
-  }
+  return generateInsightWithFallback({
+    userId,
+    cardType: 'savings-opportunity',
+    context,
+    prompt,
+    validate: validateSavingsOpportunityInsight,
+    getFallback: getFallbackSavingsOpportunityInsight,
+    format: formatSavingsOpportunityInsight,
+    errorLabel: 'savings opportunity insight',
+  })
 }
 
 export async function getAllInsights(userId = 'riya-demo') {
@@ -208,7 +256,7 @@ function buildInsightDocument(userId, insight, generatedAt) {
     title: insight.title,
     summary: insight.summary,
     severity: insight.severity,
-    source: process.env.LLM_PROVIDER === 'mock' ? 'mock' : 'ai',
+    source: insight.source || getLlmProviderSource(),
     generatedAt,
     metadata: {},
   }
@@ -231,7 +279,7 @@ export async function refreshInsights(userId = 'riya-demo') {
   return {
     ...payload,
     generatedAt: generatedAt.toISOString(),
-    source: process.env.LLM_PROVIDER === 'mock' ? 'mock' : 'ai',
+    source: getLlmProviderSource(),
   }
 }
 
@@ -264,3 +312,6 @@ export async function getStoredInsights(userId = 'riya-demo') {
     source: storedInsights[0]?.source || 'mock',
   }
 }
+
+export { getLlmHealth }
+export { categorizeExpense }
