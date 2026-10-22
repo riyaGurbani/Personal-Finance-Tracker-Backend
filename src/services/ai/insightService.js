@@ -15,6 +15,47 @@ import {
   validateSpendingSummaryInsight,
 } from './validators/spendingSummaryValidator.js'
 
+function getInsightProvider(source) {
+  return source === 'mock' ? 'mock' : process.env.LLM_PROVIDER || 'mock'
+}
+
+function normalizeInsightResponse(insight, generatedAt) {
+  const type = insight.type || insight.cardType
+  const source = insight.source || getLlmProviderSource()
+  const provider = insight.provider || getInsightProvider(source)
+  const fallbackUsed = insight.fallbackUsed ?? source === 'mock'
+
+  return {
+    id: type,
+    type,
+    cardType: type,
+    title: insight.title,
+    summary: insight.summary,
+    severity: insight.severity,
+    source,
+    provider,
+    fallbackUsed,
+    generatedAt: generatedAt ? new Date(generatedAt).toISOString() : null,
+    metadata: insight.metadata || {},
+  }
+}
+
+function buildInsightsPayload(insights, generatedAt) {
+  const normalizedInsights = insights.map((insight) => normalizeInsightResponse(insight, generatedAt))
+  const hasAiInsight = normalizedInsights.some((insight) => insight.source === 'ai')
+  const hasFallback = normalizedInsights.some((insight) => insight.fallbackUsed)
+
+  return {
+    tabs: ['Overview', 'Savings', 'Alerts'],
+    activeTab: 'Overview',
+    insights: normalizedInsights,
+    generatedAt: generatedAt ? new Date(generatedAt).toISOString() : null,
+    source: hasAiInsight ? 'ai' : 'mock',
+    provider: hasAiInsight ? normalizedInsights.find((insight) => insight.source === 'ai')?.provider || getInsightProvider('ai') : 'mock',
+    fallbackUsed: hasFallback,
+  }
+}
+
 function buildCategoryTrendContext(metrics) {
   return {
     categoryTrend: metrics,
@@ -127,13 +168,7 @@ async function getCachedInsight(userId, cardType) {
     return null
   }
 
-  return {
-    cardType: cachedInsight.cardType,
-    title: cachedInsight.title,
-    summary: cachedInsight.summary,
-    severity: cachedInsight.severity,
-    source: cachedInsight.source,
-  }
+  return normalizeInsightResponse(cachedInsight, cachedInsight.generatedAt)
 }
 
 async function generateInsightWithFallback({
@@ -149,7 +184,15 @@ async function generateInsightWithFallback({
   try {
     const insight = await generateJsonCompletion({ prompt, context })
     const validatedInsight = validate(insight) ? insight : getFallback()
-    return format(validatedInsight)
+    return normalizeInsightResponse(
+      {
+        ...format(validatedInsight),
+        source: getLlmProviderSource(),
+        provider: getInsightProvider(getLlmProviderSource()),
+        fallbackUsed: false,
+      },
+      new Date(),
+    )
   } catch (error) {
     console.error(`Failed to generate ${errorLabel}:`, error)
 
@@ -159,8 +202,15 @@ async function generateInsightWithFallback({
     }
 
     return {
-      ...format(getFallback()),
-      source: 'mock',
+      ...normalizeInsightResponse(
+        {
+          ...format(getFallback()),
+          source: 'mock',
+          provider: 'mock',
+          fallbackUsed: true,
+        },
+        new Date(),
+      ),
     }
   }
 }
@@ -240,25 +290,23 @@ export async function getAllInsights(userId = 'riya-demo') {
     getAnomalyDetectionInsight(userId),
     getSavingsOpportunityInsight(userId),
   ])
-
-  return {
-    tabs: ['Overview', 'Savings', 'Alerts'],
-    activeTab: 'Overview',
-    insights: [summary, categoryTrend, anomaly, savingsOpportunity],
-    generatedAt: new Date().toISOString(),
-  }
+  return buildInsightsPayload([summary, categoryTrend, anomaly, savingsOpportunity], new Date())
 }
 
 function buildInsightDocument(userId, insight, generatedAt) {
+  const normalizedInsight = normalizeInsightResponse(insight, generatedAt)
+
   return {
     userId,
-    cardType: insight.cardType,
-    title: insight.title,
-    summary: insight.summary,
-    severity: insight.severity,
-    source: insight.source || getLlmProviderSource(),
+    cardType: normalizedInsight.cardType,
+    title: normalizedInsight.title,
+    summary: normalizedInsight.summary,
+    severity: normalizedInsight.severity,
+    source: normalizedInsight.source,
+    provider: normalizedInsight.provider,
+    fallbackUsed: normalizedInsight.fallbackUsed,
     generatedAt,
-    metadata: {},
+    metadata: normalizedInsight.metadata,
   }
 }
 
@@ -276,11 +324,7 @@ export async function refreshInsights(userId = 'riya-demo') {
     ),
   )
 
-  return {
-    ...payload,
-    generatedAt: generatedAt.toISOString(),
-    source: getLlmProviderSource(),
-  }
+  return buildInsightsPayload(payload.insights, generatedAt)
 }
 
 export async function getStoredInsights(userId = 'riya-demo') {
@@ -298,19 +342,7 @@ export async function getStoredInsights(userId = 'riya-demo') {
     return latest
   }, null)
 
-  return {
-    tabs: ['Overview', 'Savings', 'Alerts'],
-    activeTab: 'Overview',
-    insights: storedInsights.map((insight) => ({
-      cardType: insight.cardType,
-      title: insight.title,
-      summary: insight.summary,
-      severity: insight.severity,
-      source: insight.source,
-    })),
-    generatedAt: latestGeneratedAt,
-    source: storedInsights[0]?.source || 'mock',
-  }
+  return buildInsightsPayload(storedInsights, latestGeneratedAt)
 }
 
 export { getLlmHealth }

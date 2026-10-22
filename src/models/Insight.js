@@ -16,6 +16,14 @@ const insightSchema = new mongoose.Schema(
       enum: ['mock', 'ai'],
       default: 'mock',
     },
+    provider: {
+      type: String,
+      default: 'mock',
+    },
+    fallbackUsed: {
+      type: Boolean,
+      default: false,
+    },
     generatedAt: { type: Date, required: true },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
