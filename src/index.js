@@ -5,7 +5,7 @@ import { connectDB } from './config/db.js'
 import aiRoutes from './routes/aiRoutes.js'
 import { logLlmStartupStatus } from './services/ai/llmClient.js'
 import dashboardRoutes from './routes/dashboardRoutes.js'
-import aiAssistantRoutes from './routes/aiAssistantRoutes.js'
+import aiChatRoutes from './routes/aiChatRoutes.js'
 import expenseRoutes from './routes/expenseRoutes.js'
 
 dotenv.config()
@@ -25,10 +25,10 @@ app.get('/api/health', (req, res) => {
 })
 
 // Dashboard API
-  app.use('/api/dashboard', dashboardRoutes)
-  app.use('/api/ai-assistant', aiAssistantRoutes)
+app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/expenses', expenseRoutes)
 app.use('/api/ai', aiRoutes)
+app.use('/api/ai', aiChatRoutes)
 
 // Temporary root route
 app.get('/', (req, res) => {

@@ -173,6 +173,30 @@ function getProvider() {
   return (process.env.LLM_PROVIDER || 'mock').trim().toLowerCase()
 }
 
+function getPortAiConfig() {
+  return {
+    providerName: (process.env.PORTAI_PROVIDER_NAME || 'portkey').trim(),
+    baseUrl: (process.env.PORTAI_BASE_URL || '').trim().replace(/\/$/, ''),
+    apiKey: (process.env.PORTAI_API_KEY || '').trim(),
+    model: (process.env.PORTAI_MODEL || '').trim(),
+    timeoutMs: Number(process.env.PORTAI_TIMEOUT_MS || 20000),
+    maxTokens: Number(process.env.PORTAI_MAX_TOKENS || 512),
+    healthEndpoint: (process.env.PORTAI_HEALTH_ENDPOINT || '/models').trim(),
+    // PortAI/Portkey specific configuration (optional and configurable via .env)
+    chatEndpoint: (process.env.PORTAI_CHAT_ENDPOINT || '/chat/completions').trim(),
+    // Header customization
+    authHeader: (process.env.PORTAI_AUTH_HEADER || 'Authorization').trim(),
+    authScheme: (process.env.PORTAI_AUTH_SCHEME || 'Bearer').trim(),
+    virtualKeyHeader: (process.env.PORTAI_VIRTUAL_KEY_HEADER || 'x-portkey-virtual-key').trim(),
+    virtualKey: (process.env.PORTAI_VIRTUAL_KEY || '').trim(),
+    // Payload field names (some gateways expect different keys)
+    modelField: (process.env.PORTAI_MODEL_FIELD || 'model').trim(),
+    messagesField: (process.env.PORTAI_MESSAGES_FIELD || 'messages').trim(),
+    providerField: (process.env.PORTAI_PROVIDER_FIELD || 'provider').trim(),
+    provider: (process.env.PORTAI_PROVIDER || '').trim(),
+  }
+}
+
 function getOllamaConfig() {
   return {
     baseUrl: (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
@@ -198,21 +222,28 @@ function matchesConfiguredModel(availableModel, configuredModel) {
 export async function logLlmStartupStatus() {
   const provider = getProvider()
 
-  if (provider !== 'ollama') {
-    console.log(`[AI] Provider configured: ${provider}`)
+  if (provider === 'ollama') {
+    try {
+      const health = await getLlmHealth()
+      const connectionLabel = health.status === 'ok' ? 'connected' : health.status
+
+      console.log(
+        `[AI] Ollama ${connectionLabel} | model=${health.model} | baseUrl=${health.baseUrl}${health.fallbackProvider ? ` | fallback=${health.fallbackProvider}` : ''}`,
+      )
+      return
+    } catch (error) {
+      console.warn(`[AI] Ollama connection check failed: ${error.message}`)
+      return
+    }
+  }
+
+  if (provider === 'portai') {
+    const config = getPortAiConfig()
+    console.log(`[AI] PortAI configured: ${Boolean(config.baseUrl && config.apiKey && config.model)}`)
     return
   }
 
-  try {
-    const health = await getLlmHealth()
-    const connectionLabel = health.status === 'ok' ? 'connected' : health.status
-
-    console.log(
-      `[AI] Ollama ${connectionLabel} | model=${health.model} | baseUrl=${health.baseUrl}${health.fallbackProvider ? ` | fallback=${health.fallbackProvider}` : ''}`,
-    )
-  } catch (error) {
-    console.warn(`[AI] Ollama connection check failed: ${error.message}`)
-  }
+  console.log(`[AI] Provider configured: ${provider}`)
 }
 
 function buildOllamaRequestBody(prompt) {
@@ -423,11 +454,127 @@ export async function generateJsonCompletion({ prompt, context }) {
     }
   }
 
+  if (provider === 'portai') {
+    try {
+      const answer = await generateAssistantResponseWithPortAi(prompt.user)
+      return extractJsonObject(answer.answer)
+    } catch (error) {
+      console.warn('PortAI unavailable. Falling back to mock insight generation.', {
+        code: error.code,
+        message: error.message,
+      })
+      logAiDebug('Falling back to mock provider after PortAI failure.')
+      return buildMockInsight(context)
+    }
+  }
+
   throw new Error(`Unsupported LLM provider: ${provider}. Configure a real provider or use mock.`)
 }
 
 export function getLlmProviderSource() {
   return getProvider() === 'mock' ? 'mock' : 'ai'
+}
+
+async function fetchPortAiModels() {
+  const config = getPortAiConfig()
+
+  if (!isPortAiConfigured()) {
+    throw new LlmClientError('PortAI is currently unavailable.', 'PROVIDER_UNAVAILABLE')
+  }
+
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => controller.abort(), config.timeoutMs)
+
+  try {
+    const response = await fetch(`${config.baseUrl}${config.healthEndpoint}`, {
+      method: 'GET',
+      headers: buildPortAiHeaders(config),
+      signal: controller.signal,
+    })
+
+    if (response.status === 401 || response.status === 403) {
+      throw new LlmClientError('PortAI authentication failed.', 'AUTH_ERROR')
+    }
+
+    if (!response.ok) {
+      throw new LlmClientError('PortAI health check failed.', 'PROVIDER_ERROR', {
+        status: response.status,
+      })
+    }
+
+    return response.json()
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new LlmClientError('PortAI health check timed out.', 'TIMEOUT')
+    }
+
+    if (error instanceof LlmClientError) {
+      throw error
+    }
+
+    throw new LlmClientError('Failed to reach PortAI.', 'PROVIDER_ERROR')
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
+}
+
+function extractPortAiModels(payload) {
+  const models = Array.isArray(payload?.data)
+    ? payload.data.map((entry) => entry?.id).filter(Boolean)
+    : Array.isArray(payload?.models)
+      ? payload.models.map((entry) => entry?.id || entry?.name || entry?.model).filter(Boolean)
+      : []
+
+  return models
+}
+
+async function getPortAiHealth() {
+  const config = getPortAiConfig()
+  const configured = isPortAiConfigured()
+
+  if (!configured) {
+    return {
+      provider: 'portai',
+      status: 'error',
+      configured: false,
+      baseUrl: config.baseUrl || null,
+      model: config.model || 'unconfigured',
+      modelInstalled: false,
+      availableModels: [],
+      message: 'PortAI is not fully configured.',
+    }
+  }
+
+  try {
+    const payload = await fetchPortAiModels()
+    const availableModels = extractPortAiModels(payload)
+    const modelInstalled = availableModels.includes(config.model)
+
+    return {
+      provider: 'portai',
+      status: modelInstalled ? 'ok' : 'degraded',
+      configured: true,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      modelInstalled,
+      availableModels,
+      healthEndpoint: config.healthEndpoint,
+      message: modelInstalled ? 'PortAI is reachable and the configured model is available.' : 'PortAI is reachable but the configured model was not found in the model list.',
+    }
+  } catch (error) {
+    return {
+      provider: 'portai',
+      status: 'degraded',
+      configured: true,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      modelInstalled: false,
+      availableModels: [],
+      healthEndpoint: config.healthEndpoint,
+      message: 'PortAI is configured but the health check failed.',
+      errorCode: error.code || 'PROVIDER_ERROR',
+    }
+  }
 }
 
 export async function getLlmHealth() {
@@ -478,11 +625,271 @@ export async function getLlmHealth() {
     }
   }
 
+  if (provider === 'portai') {
+    return getPortAiHealth()
+  }
+
   return {
     provider,
     status: 'error',
     configured: false,
   }
+}
+
+export async function getLlmHealthForProvider(providerId) {
+  if (providerId === 'mock') {
+    return {
+      provider: 'mock',
+      status: 'ok',
+      configured: true,
+      model: 'mock',
+    }
+  }
+
+  if (providerId === 'ollama') {
+    const config = getOllamaConfig()
+
+    try {
+      const tagsPayload = await fetchOllamaTags()
+      const models = Array.isArray(tagsPayload?.models) ? tagsPayload.models : []
+      const availableModels = models.map((entry) => entry?.name || entry?.model).filter(Boolean)
+      const modelInstalled = availableModels.some((modelName) => matchesConfiguredModel(modelName, config.model))
+
+      return {
+        provider: 'ollama',
+        status: modelInstalled ? 'ok' : 'degraded',
+        configured: true,
+        model: config.model,
+      }
+    } catch (error) {
+      return {
+        provider: 'ollama',
+        status: 'degraded',
+        configured: true,
+        model: config.model,
+      }
+    }
+  }
+
+  if (providerId === 'portai') {
+    const configured = isPortAiConfigured()
+    const config = getPortAiConfig()
+    console.log("Checking PortAI health for providerId 'portai'. Configured:", configured, "Base URL:", config.baseUrl, "Model:", config.model)
+
+    return {
+      provider: 'portai',
+      status: configured ? 'degraded' : 'error',
+      configured,
+      model: configured ? config.model : 'unconfigured',
+    }
+  }
+
+  return {
+    provider: providerId,
+    status: 'error',
+    configured: false,
+  }
+}
+
+export async function checkOllamaAvailability() {
+  const health = await getLlmHealthForProvider('ollama')
+  return {
+    available: health.status === 'ok',
+  }
+}
+
+export async function generateAssistantResponseWithOllama(message) {
+  const config = getOllamaConfig()
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => controller.abort(), config.timeoutMs)
+
+  try {
+    const response = await fetch(`${config.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        stream: false,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a concise personal finance assistant. Answer using the user spending context already available in the backend and do not mention hidden configuration.',
+          },
+          {
+            role: 'user',
+            content: message,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new LlmClientError('Ollama request failed.', 'PROVIDER_ERROR', {
+        status: response.status,
+      })
+    }
+
+    const payload = await response.json()
+    const answer = payload?.message?.content?.trim()
+
+    if (!answer) {
+      throw new LlmClientError('Ollama returned an empty response.', 'EMPTY_RESPONSE')
+    }
+
+    return {
+      answer,
+      provider: 'ollama',
+      source: 'ai',
+      fallbackUsed: false,
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new LlmClientError('Ollama request timed out.', 'TIMEOUT')
+    }
+
+    if (error instanceof LlmClientError) {
+      throw error
+    }
+
+    throw new LlmClientError('Failed to call Ollama.', 'PROVIDER_ERROR')
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
+}
+
+function buildPortAiHeaders(config) {
+  const headers = {
+    'Content-Type': 'application/json',
+  }
+
+  if (config.apiKey) {
+    // Use configured auth header & scheme
+    headers[config.authHeader] = `${config.authScheme} ${config.apiKey}`
+  }
+
+  if (config.virtualKey) {
+    headers[config.virtualKeyHeader] = config.virtualKey
+  }
+
+  return headers
+}
+
+function buildPortAiRequestBody(message, config) {
+  const messages = [
+    {
+      role: 'system',
+      content: 'You are a concise personal finance assistant. Answer clearly and do not expose backend configuration.',
+    },
+    {
+      role: 'user',
+      content: message,
+    },
+  ]
+
+  const body = {}
+  body[config.messagesField] = messages
+  body[config.modelField] = config.model
+  // Standardize token field to a common name expected by many LLM endpoints
+  body.max_tokens = config.maxTokens
+
+  // Some gateways require an upstream provider id in the payload
+  if (config.provider) {
+    body[config.providerField] = config.provider
+  }
+
+  return body
+}
+
+function extractPortAiAnswer(payload) {
+  const answer = payload?.choices?.[0]?.message?.content || payload?.message?.content || payload?.answer || ''
+
+  if (typeof answer !== 'string' || !answer.trim()) {
+    throw new LlmClientError('PortAI returned an empty response.', 'EMPTY_RESPONSE')
+  }
+
+  return answer.trim()
+}
+
+export async function generateAssistantResponseWithPortAi(message) {
+  const config = getPortAiConfig()
+
+  if (!isPortAiConfigured()) {
+    throw new LlmClientError('PortAI is currently unavailable.', 'PROVIDER_UNAVAILABLE')
+  }
+
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => controller.abort(), config.timeoutMs)
+
+  try {
+    const response = await fetch(`${config.baseUrl}${config.chatEndpoint}`, {
+      method: 'POST',
+      headers: buildPortAiHeaders(config),
+      body: JSON.stringify(buildPortAiRequestBody(message, config)),
+      signal: controller.signal,
+    })
+
+    if (response.status === 401 || response.status === 403) {
+      throw new LlmClientError('PortAI authentication failed.', 'AUTH_ERROR')
+    }
+
+    if (!response.ok) {
+      throw new LlmClientError('PortAI request failed.', 'PROVIDER_ERROR', {
+        status: response.status,
+      })
+    }
+
+    const payload = await response.json()
+    const answer = extractPortAiAnswer(payload)
+
+    // Attempt to surface a request id from response headers for diagnostics
+    const requestIdHeaderCandidates = ['x-request-id', 'request-id', 'x-portkey-request-id', 'x-amzn-requestid']
+    let requestId = null
+    try {
+      if (typeof response.headers?.get === 'function') {
+        for (const h of requestIdHeaderCandidates) {
+          const hv = response.headers.get(h)
+          if (hv) {
+            requestId = hv
+            break
+          }
+        }
+      }
+    } catch (e) {
+      // ignore header parsing errors
+    }
+
+    return {
+      answer,
+      provider: 'portai',
+      source: 'ai',
+      fallbackUsed: false,
+      _diagnostics: {
+        status: response.status,
+        model: config.model,
+        requestId: requestId || null,
+      },
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new LlmClientError('PortAI request timed out.', 'TIMEOUT')
+    }
+
+    if (error instanceof LlmClientError) {
+      throw error
+    }
+
+    throw new LlmClientError('Failed to call PortAI.', 'PROVIDER_ERROR')
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
+}
+
+export function isPortAiConfigured() {
+  const config = getPortAiConfig()
+  return Boolean(config.baseUrl && config.apiKey && config.model)
 }
 
 export { LlmClientError }
