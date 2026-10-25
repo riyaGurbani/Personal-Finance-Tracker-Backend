@@ -7,6 +7,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "seed:expenses": "node src/scripts/seedExpenses.js",
+    "ingest:kb": "node src/scripts/ingestKnowledgeBase.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

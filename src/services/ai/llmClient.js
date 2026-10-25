@@ -194,6 +194,8 @@ function getPortAiConfig() {
     messagesField: (process.env.PORTAI_MESSAGES_FIELD || 'messages').trim(),
     providerField: (process.env.PORTAI_PROVIDER_FIELD || 'provider').trim(),
     provider: (process.env.PORTAI_PROVIDER || '').trim(),
+    embeddingEndpoint: (process.env.PORTAI_EMBEDDING_ENDPOINT || '/embeddings').trim(),
+    embeddingModel: (process.env.PORTAI_EMBEDDING_MODEL || '').trim(),
   }
 }
 
@@ -792,10 +794,22 @@ function buildPortAiRequestBody(message, config) {
   const body = {}
   body[config.messagesField] = messages
   body[config.modelField] = config.model
-  // Standardize token field to a common name expected by many LLM endpoints
   body.max_tokens = config.maxTokens
 
-  // Some gateways require an upstream provider id in the payload
+  if (config.provider) {
+    body[config.providerField] = config.provider
+  }
+
+  return body
+}
+
+function buildPortAiEmbeddingRequestBody(input, config) {
+  const body = {
+    input,
+  }
+
+  body[config.modelField] = config.embeddingModel || config.model
+
   if (config.provider) {
     body[config.providerField] = config.provider
   }
@@ -887,9 +901,65 @@ export async function generateAssistantResponseWithPortAi(message) {
   }
 }
 
+export async function generateEmbeddingWithPortAi(input) {
+  const config = getPortAiConfig()
+
+  if (!isPortAiConfigured() || !config.embeddingModel) {
+    throw new LlmClientError('PortAI embeddings are currently unavailable.', 'PROVIDER_UNAVAILABLE')
+  }
+
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => controller.abort(), config.timeoutMs)
+
+  try {
+    const response = await fetch(`${config.baseUrl}${config.embeddingEndpoint}`, {
+      method: 'POST',
+      headers: buildPortAiHeaders(config),
+      body: JSON.stringify(buildPortAiEmbeddingRequestBody(input, config)),
+      signal: controller.signal,
+    })
+
+    if (response.status === 401 || response.status === 403) {
+      throw new LlmClientError('PortAI embedding authentication failed.', 'AUTH_ERROR')
+    }
+
+    if (!response.ok) {
+      throw new LlmClientError('PortAI embedding request failed.', 'PROVIDER_ERROR', {
+        status: response.status,
+      })
+    }
+
+    const payload = await response.json()
+    const embedding = payload?.data?.[0]?.embedding || payload?.embedding
+
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+      throw new LlmClientError('PortAI returned an empty embedding.', 'EMPTY_RESPONSE')
+    }
+
+    return embedding.map((value) => Number(value))
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new LlmClientError('PortAI embedding request timed out.', 'TIMEOUT')
+    }
+
+    if (error instanceof LlmClientError) {
+      throw error
+    }
+
+    throw new LlmClientError('Failed to call PortAI embeddings.', 'PROVIDER_ERROR')
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
+}
+
 export function isPortAiConfigured() {
   const config = getPortAiConfig()
   return Boolean(config.baseUrl && config.apiKey && config.model)
+}
+
+export function isPortAiEmbeddingConfigured() {
+  const config = getPortAiConfig()
+  return Boolean(config.baseUrl && config.apiKey && config.embeddingModel)
 }
 
 export { LlmClientError }

@@ -6,6 +6,7 @@ import aiRoutes from './routes/aiRoutes.js'
 import { logLlmStartupStatus } from './services/ai/llmClient.js'
 import dashboardRoutes from './routes/dashboardRoutes.js'
 import aiChatRoutes from './routes/aiChatRoutes.js'
+import aiAssistantRoutes from './routes/aiAssistantRoutes.js'
 import expenseRoutes from './routes/expenseRoutes.js'
 
 dotenv.config()
@@ -29,6 +30,7 @@ app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/expenses', expenseRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/ai', aiChatRoutes)
+app.use('/api/ai/assistant', aiAssistantRoutes)
 
 // Temporary root route
 app.get('/', (req, res) => {

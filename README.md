@@ -98,6 +98,27 @@ Use `GET /api/ai/providers/status` to fetch safe provider availability metadata 
 
 Use `POST /api/ai/chat` with a body like `{ "provider": "ollama", "message": "Show my latest spending insights" }`.
 
+Use `POST /api/ai/assistant` for the AI Assistant page. The backend now builds a lightweight RAG context by combining live expense analytics with retrieved snippets from [src/data/knowledge-base/](/C:/react_ai_poc/Personal-Finance-Tracker-Backend/src/data/knowledge-base). The response includes the assistant answer plus `rag.retrieval` metadata so the frontend can show which finance context and knowledge snippets were used.
+
+### Vector RAG for the AI Assistant page
+
+The POC now uses a simple vector-style retrieval pipeline for knowledge-base documents:
+
+1. Files in [src/data/knowledge-base/](/C:/react_ai_poc/Personal-Finance-Tracker-Backend/src/data/knowledge-base) are chunked into smaller passages.
+2. Each chunk is converted into an embedding and stored in the `KnowledgeChunk` collection.
+3. At query time, the user question is embedded and compared against stored chunk embeddings using cosine similarity in the application layer.
+4. The top matching chunks are added to the assistant prompt together with live expense analytics from MongoDB.
+
+For this POC, all three assistant providers share the same retrieval pipeline. The app first tries PortAI embeddings when `PORTAI_EMBEDDING_MODEL` is configured. If embeddings are unavailable, it falls back to a deterministic local hash-based embedding so Mock, Ollama, and PortAI remain usable for every teammate.
+
+To ingest or refresh the knowledge-base chunks:
+
+```bash
+npm run ingest:kb
+```
+
+This POC approach is intentionally simple: MongoDB stores the chunk documents and embeddings, while similarity scoring is performed in Node.js instead of a dedicated vector index. The provider dropdown remains generation-focused: Mock, Ollama, and PortAI all use the same RAG retrieval/context pipeline, but the final answer generation still comes from the selected provider.
+
 Only the provider id is sent by the browser. Secrets, base URLs, models, and API keys remain backend-only.
 
 PortAI configuration is stored only in backend environment variables:

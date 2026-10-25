@@ -32,7 +32,7 @@ export async function getAiProviderStatus(req, res) {
 
 export async function handleAiChat(req, res) {
   try {
-    const { provider = 'mock', message } = req.body || {}
+    const { provider = 'mock', message, userId = 'riya-demo' } = req.body || {}
 
     if (!message || typeof message !== 'string') {
       return res.status(400).json({
@@ -46,7 +46,7 @@ export async function handleAiChat(req, res) {
       })
     }
 
-    const response = await getAssistantResponse({ providerId: provider, message })
+    const response = await getAssistantResponse({ providerId: provider, message, userId })
     return res.json(response)
   } catch (error) {
     const mappedError = mapErrorToResponse(error)

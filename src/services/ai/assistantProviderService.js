@@ -6,7 +6,9 @@ import {
   generateAssistantResponseWithOllama,
   generateAssistantResponseWithPortAi,
   isPortAiConfigured,
+  isPortAiEmbeddingConfigured,
 } from './llmClient.js'
+import { buildAssistantRagContext } from './rag/assistantRagService.js'
 
 function formatCurrency(amount) {
   return `₹${amount.toFixed(2)}`
@@ -106,23 +108,83 @@ async function getProviderContext() {
     generatePortAiAnswer: generateAssistantResponseWithPortAi,
     getOllamaAvailability: checkOllamaAvailability,
     isPortAiConfigured,
+    isPortAiEmbeddingConfigured,
   }
+}
+
+function buildRagMetadata(ragContext, providerId) {
+  return {
+    summary: {
+      totalSpend: ragContext.summary.totalSpend,
+      transactionCount: ragContext.summary.transactionCount,
+      topCategory: ragContext.summary.topCategory,
+      topCategorySpend: ragContext.summary.topCategorySpend,
+      monthGrowth: ragContext.summary.monthGrowth,
+      currency: ragContext.summary.currency,
+    },
+    retrieval: {
+      knowledgeMatches: ragContext.knowledgeDocuments,
+      expenseContextSections: ragContext.expenseSections,
+      embeddingModel: ragContext.embeddingModel,
+      generationProvider: providerId,
+      retrievalMode: 'shared-rag',
+    },
+  }
+}
+
+function buildProviderStatus(provider, context, available) {
+  const baseStatus = {
+    id: provider.id,
+    label: provider.label,
+    available,
+  }
+
+  if (provider.id === 'mock') {
+    return {
+      ...baseStatus,
+      generationMode: 'mock',
+      retrievalMode: 'shared-rag',
+      embeddingAvailable: context.isPortAiEmbeddingConfigured(),
+      embeddingModel: context.isPortAiEmbeddingConfigured() ? 'portai' : 'hash-fallback',
+    }
+  }
+
+  if (provider.id === 'ollama') {
+    return {
+      ...baseStatus,
+      generationMode: 'ollama',
+      retrievalMode: 'shared-rag',
+      embeddingAvailable: context.isPortAiEmbeddingConfigured(),
+      embeddingModel: context.isPortAiEmbeddingConfigured() ? 'portai' : 'hash-fallback',
+    }
+  }
+
+  if (provider.id === 'portai') {
+    return {
+      ...baseStatus,
+      generationMode: 'portai',
+      retrievalMode: 'shared-rag',
+      embeddingAvailable: context.isPortAiEmbeddingConfigured(),
+      embeddingModel: context.isPortAiEmbeddingConfigured() ? 'portai' : 'hash-fallback',
+    }
+  }
+
+  return baseStatus
 }
 
 export async function getAssistantProviderStatuses() {
   const context = await getProviderContext()
   const statuses = await Promise.all(
-    getProviderStatuses().map(async (provider) => ({
-      id: provider.id,
-      label: provider.label,
-      available: await getProvider(provider.id).isAvailable(context),
-    })),
+    getProviderStatuses().map(async (provider) => {
+      const available = await getProvider(provider.id).isAvailable(context)
+      return buildProviderStatus(provider, context, available)
+    }),
   )
 
   return { providers: statuses }
 }
 
-export async function getAssistantResponse({ providerId, message }) {
+export async function getAssistantResponse({ providerId, message, userId = 'riya-demo' }) {
   const provider = getProvider(providerId)
   const context = await getProviderContext()
   const available = await provider.isAvailable(context)
@@ -131,12 +193,25 @@ export async function getAssistantResponse({ providerId, message }) {
     throw new LlmClientError(`${provider.label} is currently unavailable.`, 'PROVIDER_UNAVAILABLE')
   }
 
-  const result = await provider.chat({ message, context })
+  const ragContext = await buildAssistantRagContext({ message, userId })
+
+  let result
+  if (providerId === 'mock') {
+    result = {
+      answer: ragContext.fallbackAnswer,
+      provider: 'mock',
+      source: 'mock',
+      fallbackUsed: false,
+    }
+  } else {
+    result = await provider.chat({ message: ragContext.prompt, context })
+  }
 
   return {
     answer: result.answer,
     provider: result.provider,
     source: result.source,
     fallbackUsed: Boolean(result.fallbackUsed),
+    rag: buildRagMetadata(ragContext, providerId),
   }
 }
