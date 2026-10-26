@@ -1,12 +1,8 @@
 import { Expense } from '../models/Expense.js'
-import dashboardData from '../data/dashboard.json' with { type: 'json' }
+import { getSpendingSummaryInsight } from '../services/ai/insightService.js'
 
 export async function getDashboard(req, res) {
   const useMockData = process.env.USE_MOCK_DATA === 'true'
-
-  // if (useMockData) {
-  //   return res.json(dashboardData)
-  // }
 
   try {
     // Fetch expenses (for now, all expenses; later we can limit by date/user)
@@ -76,10 +72,27 @@ export async function getDashboard(req, res) {
       },
     ]
 
-    // Trend: simple example using total expenses; can be made more sophisticated
+    // Trend: total per day for the last 6 days
+    const daysCount = 6
+    const dailyTotals = new Array(daysCount).fill(0)
+    const now = new Date()
+
+    for (const exp of expenses) {
+      const diffMs = now - exp.date
+      const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000))
+
+      if (diffDays >= 0 && diffDays < daysCount) {
+        const index = daysCount - 1 - diffDays
+        dailyTotals[index] += exp.amount
+      }
+    }
+
+    const maxDailyTotal = Math.max(...dailyTotals, 1)
+    const bars = dailyTotals.map((total) => Math.round((total / maxDailyTotal) * 100))
+
     const trend = {
       label: `₹${totalExpenses.toFixed(2)}`,
-      bars: [35, 52, 48, 72, 68, 88],
+      bars,
     }
 
     // Category breakdown items with colors
@@ -94,11 +107,14 @@ export async function getDashboard(req, res) {
       items: categoryBreakdownItems,
     }
 
+    // AI insight: use AI service to generate a data-driven spending summary insight
+    const summaryInsight = await getSpendingSummaryInsight('riya-demo')
+
     const aiInsight = {
-      title: 'AI Spending Insight',
-      subtitle: 'Generated recommendation',
-      description:
-        'Based on your current expenses, consider reviewing your top spending categories to identify potential savings.',
+      title: summaryInsight.title,
+      subtitle: 'AI-generated spending insight',
+      description: summaryInsight.summary,
+      severity: summaryInsight.severity,
     }
 
     const recentTransactions = expenses.slice(0, 3).map((exp) => ({
