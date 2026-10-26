@@ -3,6 +3,9 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
 import aiRoutes from './routes/aiRoutes.js'
+import profileRoutes from './routes/profileRoutes.js'
+import knowledgeRoutes from './routes/knowledgeRoutes.js'
+import goalRoutes from './routes/goalRoutes.js'
 import { logLlmStartupStatus } from './services/ai/llmClient.js'
 import dashboardRoutes from './routes/dashboardRoutes.js'
 import aiChatRoutes from './routes/aiChatRoutes.js'
@@ -28,6 +31,9 @@ app.get('/api/health', (req, res) => {
 // Dashboard API
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/expenses', expenseRoutes)
+  app.use('/api/profile', profileRoutes)
+  app.use('/api/knowledge', knowledgeRoutes)
+  app.use('/api/goals', goalRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/ai', aiChatRoutes)
 app.use('/api/ai/assistant', aiAssistantRoutes)

@@ -1,12 +1,26 @@
 import { Expense } from '../models/Expense.js'
+import { UserProfile } from '../models/UserProfile.js'
 import { getSpendingSummaryInsight } from '../services/ai/insightService.js'
 
 export async function getDashboard(req, res) {
-  const useMockData = process.env.USE_MOCK_DATA === 'true'
-
   try {
-    // Fetch expenses (for now, all expenses; later we can limit by date/user)
-    const expenses = await Expense.find({}).sort({ date: -1 })
+    const userId = req.query.userId || 'riya-demo'
+
+    // Fetch user profile (for budget and personalization)
+    let profile = await UserProfile.findOne({ userId }).lean()
+
+    if (!profile) {
+      profile = await UserProfile.create({
+        userId,
+        name: 'Riya',
+        email: 'riya@example.com',
+        monthlyBudget: 65000,
+        currency: 'INR',
+      })
+    }
+
+    // Fetch expenses for this user
+    const expenses = await Expense.find({ userId }).sort({ date: -1 })
 
     if (!expenses.length) {
       return res.json({
@@ -26,7 +40,7 @@ export async function getDashboard(req, res) {
       })
     }
 
-    // Total expenses
+    // Total expenses for this user
     const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0)
 
     // Category totals
@@ -40,7 +54,9 @@ export async function getDashboard(req, res) {
       (a, b) => b[1] - a[1],
     )[0] || ['N/A', 0]
 
-    // Summary cards (similar structure to original JSON)
+    const remainingBudget = Math.max(profile.monthlyBudget - totalExpenses, 0)
+
+    // Summary cards (all values derived from DB/UserProfile)
     const summaryCards = [
       {
         id: 'total-expenses',
@@ -52,8 +68,8 @@ export async function getDashboard(req, res) {
       {
         id: 'monthly-budget',
         title: 'Monthly Budget',
-        value: '₹65,000',
-        change: 'Sample remaining budget',
+        value: `₹${profile.monthlyBudget.toFixed(2)}`,
+        change: `₹${remainingBudget.toFixed(2)} remaining`,
         icon: 'savings',
       },
       {
@@ -66,8 +82,8 @@ export async function getDashboard(req, res) {
       {
         id: 'potential-savings',
         title: 'Potential Savings',
-        value: '₹4,500',
-        change: 'Identified by AI (sample)',
+        value: '₹0',
+        change: 'Calculated by AI insights',
         icon: 'autoGraph',
       },
     ]
@@ -108,7 +124,7 @@ export async function getDashboard(req, res) {
     }
 
     // AI insight: use AI service to generate a data-driven spending summary insight
-    const summaryInsight = await getSpendingSummaryInsight('riya-demo')
+    const summaryInsight = await getSpendingSummaryInsight(userId)
 
     const aiInsight = {
       title: summaryInsight.title,
